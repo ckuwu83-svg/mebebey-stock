@@ -158,7 +158,7 @@ function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 function load(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
 
 // ======== 只需要改這裡：貼上 Apps Script「網頁應用程式網址」（結尾是 /exec） ========
-const API_URL = '貼上你的網頁應用程式網址';
+const API_URL = 'https://script.google.com/macros/s/AKfycbyArcfQ2d0tLahEP2MHY-f0wIzJs4RjmnpHdaOQNhaCdcAvTKh6BwwYE7lPrdC0BdNo/exec';
 // ===================================================================================
 
 async function call(action, payload) {
