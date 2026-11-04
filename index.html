@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#D6336C">
 <title>入庫系統</title>
+<script src="config.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -46,6 +47,16 @@
   .hidden { display:none !important; }
   .result p { margin:4px 0; }
   .muted { color:var(--mute); font-size:13px; }
+  .stock-item { cursor:pointer; align-items:center; }
+  .info { display:flex; gap:10px; align-items:center; min-width:0; }
+  .thumb { width:56px; height:56px; flex:0 0 56px; border-radius:8px; object-fit:cover; background:var(--pink-soft); }
+  .thumb.empty { display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--mute); }
+  .thumb.sm { width:48px; height:48px; flex-basis:48px; }
+  .hist { background:var(--bg); border-radius:10px; padding:4px 10px; margin:0 0 8px; }
+  .hrow { display:flex; gap:10px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .hrow:last-child { border-bottom:0; }
+  #viewer { position:fixed; inset:0; background:rgba(0,0,0,.9); z-index:30; display:none; align-items:center; justify-content:center; padding:16px; }
+  #viewer img { max-width:100%; max-height:100%; border-radius:8px; }
 </style>
 </head>
 <body>
@@ -148,6 +159,7 @@
 <div id="readerFile" class="hidden"></div>
 
 <div id="toast"></div>
+<div id="viewer"><img alt=""></div>
 
 <script>
 const S = { pin:'', user:null, products:[], selected:null, photo:null, pendingBarcode:'', liveScanner:null, shopeeRows:null };
@@ -157,13 +169,13 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp
 function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 function load(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
 
-// ======== 只需要改這裡：貼上 Apps Script「網頁應用程式網址」（結尾是 /exec） ========
-const API_URL = 'https://script.google.com/macros/s/AKfycbyArcfQ2d0tLahEP2MHY-f0wIzJs4RjmnpHdaOQNhaCdcAvTKh6BwwYE7lPrdC0BdNo/exec';
-// ===================================================================================
+// 後端網址放在同資料夾的 config.js：window.API_URL = 'https://script.google.com/macros/s/…/exec';
+// 這樣以後更新這個網頁檔，不用再重填網址
+const API_URL = String(window.API_URL || '').trim();
 
 async function call(action, payload) {
   if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(API_URL)) {
-    throw new Error('網頁還沒設定 API_URL，請管理者照說明貼上網頁應用程式網址');
+    throw new Error('找不到後端網址：請管理者在 GitHub 建立 config.js 並填入 /exec 網址');
   }
   let res;
   try {
@@ -456,15 +468,55 @@ function resetForm() {
 }
 
 // ---------- 庫存 ----------
+// Drive 照片網址加上尺寸參數，縮圖載入比較快
+const thumbUrl = (url, w) => url ? url + '=w' + w : '';
+const thumbHtml = (url, cls) => url
+  ? '<img class="thumb ' + (cls || '') + '" loading="lazy" src="' + esc(thumbUrl(url, 200)) + '" data-full="' + esc(url) + '" alt="">'
+  : '<div class="thumb empty ' + (cls || '') + '">無照片</div>';
+
 function renderStock() {
   const q = $('stockSearch').value.trim();
   const list = q ? S.products.filter(p => matchText(p, q)) : S.products;
   $('stockList').innerHTML = list.slice(0, 100).map(p =>
-    '<div class="item"><div><div class="n">' + esc(p.name) + '</div><div class="s">' + esc(p.color) + ' · ' + esc(p.sku) +
-    '</div></div><div class="q" style="color:' + (p.stock <= 0 ? 'var(--bad)' : 'inherit') + '">' + p.stock + '</div></div>').join('') +
+    '<div class="item stock-item" data-sku="' + esc(p.sku) + '"><div class="info">' + thumbHtml(p.photo) +
+    '<div style="min-width:0"><div class="n">' + esc(p.name) + '</div><div class="s">' + esc(p.color) + ' · ' + esc(p.sku) + '</div>' +
+    '<div class="s">' + (p.lastTime ? '最後異動 ' + esc(p.lastTime) : '尚無異動') + '</div></div></div>' +
+    '<div class="q" style="color:' + (p.stock <= 0 ? 'var(--bad)' : 'inherit') + '">' + p.stock + '</div></div>').join('') +
     (list.length > 100 ? '<p class="muted">只顯示前 100 項，請用搜尋縮小範圍</p>' : '') +
     (!list.length ? '<p class="muted">沒有符合的商品</p>' : '');
+  $('stockList').querySelectorAll('.stock-item').forEach(el => el.onclick = () => toggleHistory(el));
 }
+
+// 點商品：展開／收合這個商品的異動紀錄（照片、時間、操作人）
+async function toggleHistory(el) {
+  const next = el.nextElementSibling;
+  if (next && next.classList.contains('hist')) { next.remove(); return; }
+  const box = document.createElement('div');
+  box.className = 'hist';
+  box.innerHTML = '<p class="muted">讀取中…</p>';
+  el.after(box);
+  try {
+    const rows = await call('history', { sku: el.dataset.sku });
+    box.innerHTML = rows.length ? rows.map(r =>
+      '<div class="hrow">' + thumbHtml(r.photo, 'sm') + '<div style="min-width:0">' +
+      '<div><b>' + esc(r.type) + ' ' + (r.qty > 0 ? '+' : '') + r.qty + '</b></div>' +
+      '<div class="s">' + esc(r.time) + ' · ' + esc(r.staff) + '</div>' +
+      (r.note ? '<div class="s">' + esc(r.note) + '</div>' : '') + '</div></div>').join('')
+      : '<p class="muted">還沒有異動紀錄</p>';
+  } catch (e) {
+    box.innerHTML = '<p class="muted">' + esc(e.message) + '</p>';
+  }
+}
+
+// 點紀錄裡的照片看大圖，點任何地方關閉
+document.addEventListener('click', e => {
+  const img = e.target.closest('.hist img.thumb');
+  if (!img) return;
+  e.stopPropagation();
+  $('viewer').querySelector('img').src = img.dataset.full;
+  $('viewer').style.display = 'flex';
+});
+$('viewer').onclick = () => { $('viewer').style.display = 'none'; };
 $('stockSearch').addEventListener('input', renderStock);
 $('refreshBtn').onclick = async () => {
   try { S.products = (await call('init')).products; renderStock(); toast('已更新'); }
