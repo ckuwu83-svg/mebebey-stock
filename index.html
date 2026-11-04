@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#D6336C">
+<title>入庫系統</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root { --pink:#D6336C; --pink-soft:#FCE4EC; --ink:#222; --mute:#888; --line:#E6E6E6; --bg:#FAFAFA; --ok:#2E7D32; --bad:#C62828; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang TC","Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); font-size:16px; }
+  header { position:sticky; top:0; z-index:5; background:#fff; border-bottom:1px solid var(--line); padding:10px 16px 0; }
+  .top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .top h1 { font-size:18px; margin:0; }
+  .tabs { display:flex; margin-top:8px; }
+  .tabs button { flex:1; border:0; background:none; padding:10px 0; font-size:15px; color:var(--mute); border-bottom:3px solid transparent; }
+  .tabs button.on { color:var(--pink); border-color:var(--pink); font-weight:600; }
+  main { padding:16px; max-width:560px; margin:0 auto; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--mute); margin:0 0 6px; }
+  input, select { width:100%; font-size:16px; padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  .btn { display:block; width:100%; border:0; border-radius:10px; padding:13px; font-size:16px; font-weight:600; background:var(--pink); color:#fff; }
+  .btn.ghost { background:var(--pink-soft); color:var(--pink); }
+  .btn:disabled { opacity:.5; }
+  .list { margin-top:8px; }
+  .item { padding:10px 4px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+  .item:last-child { border-bottom:0; }
+  .item .n { font-weight:600; }
+  .item .s { font-size:13px; color:var(--mute); }
+  .item .q { font-weight:700; white-space:nowrap; }
+  .chosen { background:var(--pink-soft); border-radius:10px; padding:12px; margin-top:10px; }
+  .notice { background:#FFF8E1; border-radius:10px; padding:10px 12px; font-size:14px; margin-top:10px; }
+  .qty { display:flex; align-items:center; gap:8px; }
+  .qty button { width:48px; height:46px; border:1px solid var(--line); border-radius:10px; background:#fff; font-size:22px; }
+  .qty input { text-align:center; font-size:20px; font-weight:700; }
+  .photo { margin-top:8px; width:100%; border-radius:10px; display:none; }
+  #toast { position:fixed; left:16px; right:16px; bottom:20px; padding:13px 16px; border-radius:10px; color:#fff; background:var(--ok); font-size:15px; display:none; z-index:20; }
+  #toast.bad { background:var(--bad); }
+  #scanner { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10; display:none; flex-direction:column; justify-content:center; padding:16px; }
+  #reader { width:100%; background:#000; border-radius:10px; overflow:hidden; }
+  .hidden { display:none !important; }
+  .result p { margin:4px 0; }
+  .muted { color:var(--mute); font-size:13px; }
+</style>
+</head>
+<body>
+
+<!-- 存取碼 -->
+<main id="gate">
+  <div class="card">
+    <h2 style="margin-top:0">入庫系統</h2>
+    <label>個人密碼</label>
+    <input id="pin" type="password" autocomplete="off">
+    <div style="height:12px"></div>
+    <button class="btn" id="loginBtn">進入</button>
+  </div>
+</main>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="top">
+      <h1>入庫系統</h1>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="who" class="muted"></span>
+        <button id="logoutBtn" style="border:0;background:none;color:var(--pink);font-size:14px">登出</button>
+      </div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button data-tab="in" class="on">進出庫</button>
+      <button data-tab="stock">庫存</button>
+      <button data-tab="shopee">匯入蝦皮</button>
+    </div>
+  </header>
+
+  <!-- 進出庫 -->
+  <main id="tab-in">
+    <div class="card">
+      <label>1. 找商品（掃條碼／掃碼槍／打字搜尋）</label>
+      <div class="row">
+        <input id="barcode" placeholder="條碼（掃碼槍直接掃）" inputmode="numeric" autocomplete="off">
+        <button class="btn ghost" id="scanBtn" style="flex:0 0 96px">📷 掃描</button>
+      </div>
+      <div style="height:8px"></div>
+      <input id="search" placeholder="或輸入品名／色號搜尋" autocomplete="off">
+      <div id="bindNotice" class="notice hidden"></div>
+      <div id="results" class="list"></div>
+      <div id="chosen" class="chosen hidden"></div>
+    </div>
+
+    <div class="card">
+      <label>2. 類型</label>
+      <select id="type"></select>
+      <div style="height:12px"></div>
+      <label id="qtyLabel">3. 數量</label>
+      <div class="qty">
+        <button id="minus">−</button>
+        <input id="qty" type="number" inputmode="numeric" value="1" min="0">
+        <button id="plus">＋</button>
+      </div>
+      <div style="height:12px"></div>
+      <label id="photoLabel">4. 拍照（入庫必拍）</label>
+      <button class="btn ghost" id="photoBtn">📸 拍照</button>
+      <input id="photoInput" type="file" accept="image/*" capture="environment" class="hidden">
+      <img id="photoPreview" class="photo" alt="">
+    </div>
+
+    <button class="btn" id="submitBtn">送出</button>
+  </main>
+
+  <!-- 庫存 -->
+  <main id="tab-stock" class="hidden">
+    <div class="card">
+      <div class="row">
+        <input id="stockSearch" placeholder="品名／色號／條碼" autocomplete="off">
+        <button class="btn ghost" id="refreshBtn" style="flex:0 0 80px">更新</button>
+      </div>
+      <div id="stockList" class="list"></div>
+    </div>
+  </main>
+
+  <!-- 匯入蝦皮 -->
+  <main id="tab-shopee" class="hidden">
+    <div class="card">
+      <label>選擇蝦皮訂單匯出檔（.xlsx / .csv）</label>
+      <input id="shopeeFile" type="file" accept=".xlsx,.xls,.csv">
+      <p class="muted">同一張訂單重複匯入不會重複扣庫存；取消的訂單會自動加回。</p>
+      <div id="shopeePreview" class="result"></div>
+      <button class="btn hidden" id="importBtn">確認匯入</button>
+      <div id="shopeeResult" class="result"></div>
+    </div>
+  </main>
+</div>
+
+<!-- 掃描視窗 -->
+<div id="scanner">
+  <div id="reader"></div>
+  <p id="scanHint" style="color:#fff;font-size:14px;text-align:center">把條碼對準框內</p>
+  <button class="btn" id="scanPhotoBtn">📷 改用拍照辨識</button>
+  <div style="height:10px"></div>
+  <button class="btn ghost" id="scanClose">關閉</button>
+</div>
+<input id="scanFileInput" type="file" accept="image/*" capture="environment" class="hidden">
+<div id="readerFile" class="hidden"></div>
+
+<div id="toast"></div>
+
+<script>
+const S = { pin:'', user:null, products:[], selected:null, photo:null, pendingBarcode:'', liveScanner:null, shopeeRows:null };
+const can = perm => !!(S.user && S.user.perms.indexOf(perm) >= 0);
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function load(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+
+// ======== 只需要改這裡：貼上 Apps Script「網頁應用程式網址」（結尾是 /exec） ========
+const API_URL = '貼上你的網頁應用程式網址';
+// ===================================================================================
+
+async function call(action, payload) {
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(API_URL)) {
+    throw new Error('網頁還沒設定 API_URL，請管理者照說明貼上網頁應用程式網址');
+  }
+  let res;
+  try {
+    // 用 text/plain 送出，避免瀏覽器的跨網域預檢被 Google 擋下
+    res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: action, payload: payload || null, pin: S.pin }),
+    });
+  } catch (e) {
+    throw new Error('連不到伺服器，請確認網路後再試一次');
+  }
+  let data;
+  try { data = await res.json(); } catch (e) { throw new Error('伺服器回應異常，請確認後端已部署新版本'); }
+  if (!data.ok) throw new Error(data.error || '發生錯誤');
+  return data.data;
+}
+
+let toastTimer;
+function toast(msg, bad) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = bad ? 'bad' : '';
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, bad ? 4500 : 2500);
+}
+
+// ---------- 登入 ----------
+async function login() {
+  S.pin = $('pin').value.trim();
+  if (!S.pin) return;
+  $('loginBtn').disabled = true;
+  try {
+    const d = await call('init');
+    save('pin', S.pin);
+    S.user = d.user;
+    S.products = d.products;
+    applyRole();
+    $('gate').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    renderStock();
+    $('barcode').focus();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('loginBtn').disabled = false;
+  }
+}
+$('loginBtn').onclick = login;
+$('pin').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+(function () { const p = load('pin'); if (p) { $('pin').value = p; login(); } })();
+
+// 依角色顯示：點貨只看得到「找商品＋數量＋拍照」
+function applyRole() {
+  $('who').textContent = S.user.name + '（' + S.user.role + '）';
+  const types = ['入庫', '退貨入庫', '手動出庫', '盤點調整'].filter(can);
+  $('type').innerHTML = types.map(t => '<option>' + t + '</option>').join('');
+  $('type').onchange();
+  $('type').parentElement.querySelector('label').style.display = types.length > 1 ? '' : 'none';
+  $('type').style.display = types.length > 1 ? '' : 'none';
+  const tabOk = { in: true, stock: can('查庫存'), shopee: can('匯入蝦皮') };
+  document.querySelectorAll('#tabs button').forEach(b => b.style.display = tabOk[b.dataset.tab] ? '' : 'none');
+  $('tabs').style.display = (tabOk.stock || tabOk.shopee) ? '' : 'none';
+  document.querySelector('#tabs button[data-tab="in"]').click();
+}
+$('logoutBtn').onclick = () => {
+  try { localStorage.removeItem('pin'); } catch (e) {}
+  S.pin = ''; S.user = null; S.products = [];
+  resetForm();
+  $('pin').value = '';
+  $('app').classList.add('hidden');
+  $('gate').classList.remove('hidden');
+};
+const stockHtml = p => can('查庫存') ? String(p.stock) : '';
+
+// ---------- 分頁 ----------
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['in', 'stock', 'shopee'].forEach(t => $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
+});
+
+// ---------- 找商品 ----------
+function matchText(p, q) {
+  const s = (p.name + ' ' + p.color + ' ' + p.sku + ' ' + p.barcode).toLowerCase();
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(w => s.indexOf(w) >= 0);
+}
+
+function renderResults(list) {
+  $('results').innerHTML = list.slice(0, 30).map(p =>
+    '<div class="item" data-sku="' + esc(p.sku) + '"><div><div class="n">' + esc(p.name) + '</div><div class="s">' +
+    esc(p.color) + ' · ' + esc(p.sku) + '</div></div><div class="q">' + stockHtml(p) + '</div></div>').join('') +
+    (list.length > 30 ? '<p class="muted">還有 ' + (list.length - 30) + ' 項，請打更精確</p>' : '');
+  $('results').querySelectorAll('.item').forEach(el => el.onclick = () => choose(el.dataset.sku));
+}
+
+$('search').addEventListener('input', () => {
+  const q = $('search').value.trim();
+  renderResults(q ? S.products.filter(p => matchText(p, q)) : []);
+});
+
+function onBarcode(code) {
+  code = String(code || '').trim();
+  if (!code) return;
+  $('barcode').value = code;
+  const hits = S.products.filter(p => p.barcode === code);
+  if (hits.length === 1) { S.pendingBarcode = ''; $('bindNotice').classList.add('hidden'); return choose(hits[0].sku); }
+  if (hits.length > 1) { renderResults(hits); toast('這個條碼對到多個商品，請點選一個'); return; }
+  S.pendingBarcode = can('綁定條碼') ? code : '';
+  $('bindNotice').innerHTML = '條碼 <b>' + esc(code) + '</b> 還沒綁定商品。' + (can('綁定條碼')
+    ? '請在上面搜尋並點選商品，系統會自動綁定，下次掃就直接帶出。'
+    : '請用品名搜尋選商品，並告訴管理者幫忙綁定這個條碼。');
+  $('bindNotice').classList.remove('hidden');
+  $('search').focus();
+}
+$('barcode').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); onBarcode($('barcode').value); } });
+
+async function choose(sku) {
+  const p = S.products.find(x => x.sku === sku);
+  if (!p) return;
+  if (S.pendingBarcode) {
+    const code = S.pendingBarcode;
+    if (!confirm('把條碼 ' + code + ' 綁定到「' + p.name + ' ' + p.color + '」？')) return;
+    try {
+      await call('bindBarcode', { sku: p.sku, barcode: code });
+      p.barcode = code;
+      toast('條碼已綁定');
+    } catch (e) { return toast(e.message, true); }
+    S.pendingBarcode = '';
+    $('bindNotice').classList.add('hidden');
+  }
+  S.selected = p;
+  $('results').innerHTML = '';
+  $('search').value = '';
+  $('chosen').innerHTML = '<div class="n" style="font-weight:700">' + esc(p.name) + '</div><div class="s muted">' +
+    esc(p.color) + ' · ' + esc(p.sku) + '</div>' +
+    (can('查庫存') ? '<div style="margin-top:6px">目前庫存：<b>' + p.stock + '</b></div>' : '');
+  $('chosen').classList.remove('hidden');
+}
+
+// ---------- 掃描條碼 ----------
+$('scanBtn').onclick = async () => {
+  $('scanner').style.display = 'flex';
+  $('reader').style.display = 'block';
+  $('scanHint').textContent = '把條碼對準框內';
+  try {
+    S.liveScanner = new Html5Qrcode('reader', scanConfig());
+    await S.liveScanner.start({ facingMode: 'environment' }, { fps: 15, qrbox: { width: 280, height: 140 } },
+      text => { if (navigator.vibrate) navigator.vibrate(80); stopScanner(); onBarcode(text); }, () => {});
+  } catch (e) {
+    // 沒給鏡頭權限或手機不支援：提示改用拍照辨識
+    S.liveScanner = null;
+    $('reader').style.display = 'none';
+    $('scanHint').textContent = '鏡頭打不開。請確認有允許這個網頁使用相機，或按下方「改用拍照辨識」。';
+  }
+};
+function scanConfig() {
+  const F = Html5QrcodeSupportedFormats;
+  return {
+    verbose: false,
+    formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF, F.QR_CODE],
+    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+  };
+}
+$('scanPhotoBtn').onclick = () => { $('scanFileInput').click(); stopScanner(); };
+async function stopScanner() {
+  $('scanner').style.display = 'none';
+  if (S.liveScanner) {
+    try { if (S.liveScanner.isScanning) await S.liveScanner.stop(); S.liveScanner.clear(); } catch (e) {}
+    S.liveScanner = null;
+  }
+}
+$('scanClose').onclick = stopScanner;
+$('scanFileInput').onchange = async () => {
+  const f = $('scanFileInput').files[0];
+  $('scanFileInput').value = '';
+  if (!f) return;
+  try {
+    S.fileScanner = S.fileScanner || new Html5Qrcode('readerFile', scanConfig());
+    const text = await S.fileScanner.scanFile(f, false);
+    onBarcode(text);
+  } catch (e) {
+    toast('讀不到條碼，請靠近一點、拍清楚，或直接搜尋商品', true);
+  }
+};
+
+// ---------- 數量與類型 ----------
+$('minus').onclick = () => { $('qty').value = Math.max(0, (parseInt($('qty').value, 10) || 0) - 1); };
+$('plus').onclick = () => { $('qty').value = (parseInt($('qty').value, 10) || 0) + 1; };
+$('type').onchange = () => {
+  const t = $('type').value;
+  $('qtyLabel').textContent = t === '盤點調整' ? '3. 實際盤點數量' : '3. 數量';
+  $('photoLabel').textContent = t === '入庫' ? '4. 拍照（入庫必拍）' : '4. 拍照（選填）';
+};
+
+// ---------- 拍照 ----------
+$('photoBtn').onclick = () => $('photoInput').click();
+$('photoInput').onchange = async () => {
+  const f = $('photoInput').files[0];
+  if (!f) return;
+  try {
+    S.photo = await compress(f);
+    $('photoPreview').src = S.photo;
+    $('photoPreview').style.display = 'block';
+    $('photoBtn').textContent = '📸 重拍';
+  } catch (e) { toast('照片讀取失敗，請再拍一次', true); }
+};
+function compress(file, max, quality) {
+  max = max || 1280; quality = quality || 0.8;
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * s);
+      c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// ---------- 送出 ----------
+$('submitBtn').onclick = async () => {
+  const type = $('type').value, qty = parseInt($('qty').value, 10);
+  if (!S.selected) return toast('請先選商品', true);
+  if (isNaN(qty) || (type !== '盤點調整' && qty <= 0) || qty < 0) return toast('數量不正確', true);
+  if (type === '入庫' && !S.photo) return toast('入庫需要拍照', true);
+  $('submitBtn').disabled = true;
+  $('submitBtn').textContent = '送出中…';
+  try {
+    const p = S.selected;
+    const photo = S.photo ? await watermark(S.photo, [
+      nowStr() + ' · ' + S.user.name,
+      type + ' ' + p.name + ' ' + p.color + ' × ' + qty,
+    ]) : null;
+    const r = await call('submitMove', { sku: p.sku, type, qty, photo });
+    if (r.stock != null) p.stock = r.stock;
+    toast('✅ ' + r.message + '｜' + r.time + ' 已記錄' + (r.stock != null ? '（庫存 ' + r.stock + '）' : ''));
+    resetForm();
+    renderStock();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('submitBtn').disabled = false;
+    $('submitBtn').textContent = '送出';
+  }
+};
+function nowStr() {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '/' + z(d.getMonth() + 1) + '/' + z(d.getDate()) + ' ' + z(d.getHours()) + ':' + z(d.getMinutes());
+}
+// 在照片底部壓上時間、操作人、商品與數量（照片本身就是證據，不怕被拿去別處用）
+function watermark(dataUrl, lines) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const fs = Math.max(16, Math.round(c.width / 30));
+      const pad = Math.round(fs * 0.6), lh = Math.round(fs * 1.35);
+      const h = pad * 2 + lh * lines.length;
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      g.fillRect(0, c.height - h, c.width, h);
+      g.fillStyle = '#fff';
+      g.textBaseline = 'top';
+      g.font = '600 ' + fs + 'px -apple-system,"PingFang TC","Noto Sans TC",sans-serif';
+      lines.forEach((t, i) => g.fillText(t, pad, c.height - h + pad + i * lh, c.width - pad * 2));
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+function resetForm() {
+  S.selected = null; S.photo = null;
+  $('chosen').classList.add('hidden');
+  $('barcode').value = '';
+  $('qty').value = 1;
+  $('photoInput').value = '';
+  $('photoPreview').style.display = 'none';
+  $('photoBtn').textContent = '📸 拍照';
+  $('barcode').focus();
+}
+
+// ---------- 庫存 ----------
+function renderStock() {
+  const q = $('stockSearch').value.trim();
+  const list = q ? S.products.filter(p => matchText(p, q)) : S.products;
+  $('stockList').innerHTML = list.slice(0, 100).map(p =>
+    '<div class="item"><div><div class="n">' + esc(p.name) + '</div><div class="s">' + esc(p.color) + ' · ' + esc(p.sku) +
+    '</div></div><div class="q" style="color:' + (p.stock <= 0 ? 'var(--bad)' : 'inherit') + '">' + p.stock + '</div></div>').join('') +
+    (list.length > 100 ? '<p class="muted">只顯示前 100 項，請用搜尋縮小範圍</p>' : '') +
+    (!list.length ? '<p class="muted">沒有符合的商品</p>' : '');
+}
+$('stockSearch').addEventListener('input', renderStock);
+$('refreshBtn').onclick = async () => {
+  try { S.products = (await call('init')).products; renderStock(); toast('已更新'); }
+  catch (e) { toast(e.message, true); }
+};
+
+// ---------- 匯入蝦皮 ----------
+const COLS = {
+  orderId: ['訂單編號'], status: ['訂單狀態'], sku: ['商品選項貨號', '選項貨號'],
+  mainSku: ['主商品貨號', '商品貨號'], name: ['商品名稱'], option: ['商品選項名稱', '選項名稱'], qty: ['數量'],
+};
+function findCol(header, names) {
+  for (const n of names) { const i = header.findIndex(h => String(h).trim() === n); if (i >= 0) return i; }
+  for (const n of names) { const i = header.findIndex(h => String(h).indexOf(n) >= 0); if (i >= 0) return i; }
+  return -1;
+}
+$('shopeeFile').onchange = async () => {
+  const f = $('shopeeFile').files[0];
+  $('shopeeResult').innerHTML = '';
+  $('importBtn').classList.add('hidden');
+  if (!f) return;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+    const hi = data.slice(0, 10).findIndex(r => r.some(c => String(c).trim() === '訂單編號'));
+    if (hi < 0) throw new Error('找不到「訂單編號」欄，請確認是蝦皮的訂單匯出檔');
+    const header = data[hi];
+    const idx = {};
+    Object.keys(COLS).forEach(k => idx[k] = findCol(header, COLS[k]));
+    const missing = [];
+    if (idx.orderId < 0) missing.push('訂單編號');
+    if (idx.qty < 0) missing.push('數量');
+    if (idx.sku < 0 && idx.mainSku < 0 && idx.name < 0) missing.push('貨號或商品名稱');
+    if (missing.length) throw new Error('缺少欄位：' + missing.join('、'));
+    const get = (r, k) => idx[k] >= 0 ? String(r[idx[k]]).trim() : '';
+    S.shopeeRows = data.slice(hi + 1).map(r => ({
+      orderId: get(r, 'orderId'), status: get(r, 'status'),
+      sku: get(r, 'sku') || get(r, 'mainSku'),
+      name: get(r, 'name'), option: get(r, 'option'), qty: Number(get(r, 'qty')) || 0,
+    })).filter(r => r.orderId && r.qty > 0);
+    const orders = new Set(S.shopeeRows.map(r => r.orderId)).size;
+    $('shopeePreview').innerHTML = '<p>讀到 <b>' + orders + '</b> 張訂單、<b>' + S.shopeeRows.length + '</b> 列商品。</p>' +
+      (idx.sku < 0 ? '<p class="muted">⚠️ 檔案沒有「商品選項貨號」欄，會改用主商品貨號或品名比對。</p>' : '');
+    $('importBtn').classList.remove('hidden');
+  } catch (e) {
+    $('shopeePreview').innerHTML = '';
+    toast(e.message, true);
+  }
+};
+$('importBtn').onclick = async () => {
+  if (!S.shopeeRows) return;
+  $('importBtn').disabled = true;
+  $('importBtn').textContent = '匯入中…';
+  try {
+    const r = await call('importShopee', { rows: S.shopeeRows });
+    $('shopeeResult').innerHTML =
+      '<p>✅ 新扣庫存：<b>' + r.deducted + '</b> 筆（共 ' + r.deductedQty + ' 件）</p>' +
+      '<p>↩️ 取消回補：' + r.restored + ' 筆</p>' +
+      '<p class="muted">重複略過 ' + r.duplicated + ' 筆、取消且未扣過 ' + r.cancelledSkipped + ' 筆</p>' +
+      (r.unmatched.length ? '<div class="notice">⚠️ ' + r.unmatched.length + ' 筆對不到商品（已記在「待處理貨號」表）：<br>' +
+        r.unmatched.slice(0, 30).map(esc).join('<br>') + '<br>補好商品資料後，重新匯入同一份檔案即可，不會重複扣。</div>' : '');
+    $('importBtn').classList.add('hidden');
+    $('shopeeFile').value = '';
+    S.shopeeRows = null;
+    S.products = (await call('init')).products;
+    renderStock();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $('importBtn').disabled = false;
+    $('importBtn').textContent = '確認匯入';
+  }
+};
+</script>
+</body>
+</html>
